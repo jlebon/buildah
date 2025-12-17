@@ -1197,6 +1197,16 @@ func (s *stageExecutor) getContentSummaryAfterAddingContent() string {
 	return summary
 }
 
+func isLocalTransport(ref string) bool {
+	localTransports := []string{"oci-archive:", "docker-archive:", "dir:", "oci:"}
+	for _, t := range localTransports {
+		if strings.HasPrefix(ref, t) {
+			return true
+		}
+	}
+	return false
+}
+
 // Execute runs each of the steps in the stage's parsed tree, in turn.
 func (s *stageExecutor) execute(ctx context.Context, base string) (imgID string, commitResults *buildah.CommitResults, onlyBaseImg bool, err error) {
 	var resourceUsage rusage.Rusage
@@ -1219,7 +1229,17 @@ func (s *stageExecutor) execute(ctx context.Context, base string) (imgID string,
 	// registry, subject to the passed-in pull policy.
 	if isStage, err := s.executor.waitForStage(ctx, base, s.stages[:s.index]); isStage && err != nil {
 		return "", nil, false, err
+	} else if isLocalTransport(base) {
+		// If the base image is a local transport, then assume that it has a dependency
+		// on all stages before it since any of those stages could produce the local
+		// artifact.
+		for _, stage := range s.stages[:s.index] {
+			if _, err := s.executor.waitForStage(ctx, stage.Name, s.stages[:s.index]); err != nil {
+				return "", nil, false, err
+			}
+		}
 	}
+
 	pullPolicy := s.executor.pullPolicy
 	s.executor.stagesLock.Lock()
 	var preserveBaseImageAnnotationsAtStageStart bool
